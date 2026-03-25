@@ -14,7 +14,15 @@ from datetime import datetime
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
 ANALYSIS_TARGET    = os.environ.get("ANALYSIS_TARGET", "")
-MODEL              = "mistralai/mistral-7b-instruct:free"
+
+# Fallback model list — tries each in order if previous fails (404/429/503)
+MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "deepseek/deepseek-r1-distill-llama-70b:free",
+    "qwen/qwen3-8b:free",
+]
 
 
 def get_headers():
@@ -27,31 +35,51 @@ def get_headers():
     }
 
 
-# ── LLM Call ───────────────────────────────────────────────────────────────────
+# ── LLM Call with fallback ─────────────────────────────────────────────────────
 def call_llm(system: str, user: str) -> str:
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user}
-        ],
-        "max_tokens": 1500,
-        "temperature": 0.2
-    }
-    resp = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=get_headers(),
-        json=payload,
-        timeout=90
-    )
-    if not resp.ok:
-        print(f"  LLM error {resp.status_code}: {resp.text[:300]}")
-        resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    last_error = None
+    for model in MODELS:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user}
+            ],
+            "max_tokens": 1500,
+            "temperature": 0.2
+        }
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=get_headers(),
+                json=payload,
+                timeout=90
+            )
+            if resp.status_code in (404, 429, 503):
+                print(f"  Model {model} failed ({resp.status_code}), trying next...")
+                last_error = resp.text
+                continue
+            if not resp.ok:
+                print(f"  LLM error {resp.status_code}: {resp.text[:200]}")
+                resp.raise_for_status()
+            print(f"  ✓ Model used: {model}")
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except requests.exceptions.Timeout:
+            print(f"  Model {model} timed out, trying next...")
+            last_error = "timeout"
+            continue
+        except Exception as e:
+            print(f"  Model {model} error: {e}, trying next...")
+            last_error = str(e)
+            continue
+
+    raise RuntimeError(f"All models failed. Last error: {last_error}")
 
 
 # ── GitHub Fetcher ─────────────────────────────────────────────────────────────
 def fetch_github_repo(repo_url: str) -> dict:
+    if not repo_url.startswith("http"):
+        repo_url = "https://github.com/" + repo_url
     match = re.search(r"github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", repo_url)
     if not match:
         raise ValueError(f"Invalid GitHub URL: {repo_url}")
@@ -108,7 +136,7 @@ def fetch_github_repo(repo_url: str) -> dict:
 # ── Input Preparation ──────────────────────────────────────────────────────────
 def prepare_code_context(target: str):
     target = target.strip()
-    if "github.com" in target:
+    if "github.com" in target or re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", target):
         print(f"\n[INPUT] GitHub repo detected: {target}")
         files = fetch_github_repo(target)
         if not files:
