@@ -6,7 +6,7 @@ on:
       analysis_target:
         description: "GitHub repo URL (https://github.com/owner/repo) OR paste your code directly"
         required: true
-        default: "https://github.com/manohar99-1/autonomous-book-publisher"
+        default: "manohar99-1/Vite-synapse-news"
 
 jobs:
   analyze:
