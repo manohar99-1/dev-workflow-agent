@@ -1,6 +1,6 @@
 # 🤖 Dev Workflow Agent
 
-An autonomous AI agent that analyzes codebases and assists with development workflows — built for **LegalSeva Assignment 2**.
+An autonomous AI agent that analyzes codebases and assists with development workflows .
 
 ## What It Does
 
