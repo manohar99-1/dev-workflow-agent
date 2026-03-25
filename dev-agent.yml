@@ -1,0 +1,51 @@
+name: Dev Workflow Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      analysis_target:
+        description: "GitHub repo URL (https://github.com/owner/repo) OR paste your code directly"
+        required: true
+        default: "https://github.com/manohar99-1/autonomous-book-publisher"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # needed to commit the report back to repo
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Dev Workflow Agent
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANALYSIS_TARGET: ${{ github.event.inputs.analysis_target }}
+        run: python agent.py
+
+      - name: Upload report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-workflow-report
+          path: reports/
+          retention-days: 30
+
+      - name: Commit report to repo
+        run: |
+          git config user.name "Dev Workflow Agent"
+          git config user.email "agent@github.com"
+          git add reports/
+          git diff --staged --quiet || git commit -m "🤖 Agent report: ${{ github.event.inputs.analysis_target }}"
+          git push
+        continue-on-error: true  # won't fail run if nothing to commit
