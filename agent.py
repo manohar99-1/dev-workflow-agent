@@ -20,8 +20,12 @@ MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
     "google/gemma-3-27b-it:free",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
-    "qwen/qwen3-8b:free",
+    "google/gemini-2.0-flash-exp:free",
+    "microsoft/phi-4-reasoning-plus:free",
+    "deepseek/deepseek-chat-v3-0324:free",
+    "tngtech/deepseek-r1t-chimera:free",
+    "moonshotai/kimi-vl-a3b-thinking:free",
+    "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
 ]
 
 
@@ -35,8 +39,9 @@ def get_headers():
     }
 
 
-# ── LLM Call with fallback ─────────────────────────────────────────────────────
+# ── LLM Call with fallback + retry on 429 ────────────────────────────────────
 def call_llm(system: str, user: str) -> str:
+    import time
     last_error = None
     for model in MODELS:
         payload = {
@@ -48,30 +53,39 @@ def call_llm(system: str, user: str) -> str:
             "max_tokens": 1500,
             "temperature": 0.2
         }
-        try:
-            resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=get_headers(),
-                json=payload,
-                timeout=90
-            )
-            if resp.status_code in (404, 429, 503):
-                print(f"  Model {model} failed ({resp.status_code}), trying next...")
-                last_error = resp.text
+        # Retry up to 3 times on 429 before moving to next model
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=get_headers(),
+                    json=payload,
+                    timeout=90
+                )
+                if resp.status_code == 429:
+                    wait = 10 * (attempt + 1)  # 10s, 20s, 30s
+                    print(f"  Model {model} rate limited (429), waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                if resp.status_code in (404, 503):
+                    print(f"  Model {model} failed ({resp.status_code}), trying next...")
+                    last_error = resp.text
+                    break  # skip to next model
+                if not resp.ok:
+                    print(f"  LLM error {resp.status_code}: {resp.text[:200]}")
+                    resp.raise_for_status()
+                print(f"  ✓ Model used: {model}")
+                return resp.json()["choices"][0]["message"]["content"].strip()
+            except requests.exceptions.Timeout:
+                print(f"  Model {model} timed out (attempt {attempt+1}), retrying...")
+                last_error = "timeout"
                 continue
-            if not resp.ok:
-                print(f"  LLM error {resp.status_code}: {resp.text[:200]}")
-                resp.raise_for_status()
-            print(f"  ✓ Model used: {model}")
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        except requests.exceptions.Timeout:
-            print(f"  Model {model} timed out, trying next...")
-            last_error = "timeout"
-            continue
-        except Exception as e:
-            print(f"  Model {model} error: {e}, trying next...")
-            last_error = str(e)
-            continue
+            except Exception as e:
+                print(f"  Model {model} error: {e}")
+                last_error = str(e)
+                break
+        else:
+            print(f"  Model {model} exhausted retries, trying next...")
 
     raise RuntimeError(f"All models failed. Last error: {last_error}")
 
