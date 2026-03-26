@@ -1,13 +1,17 @@
 """
 Dev Workflow Agent - LegalSeva Assignment 2
 Autonomously analyzes code: understands, debugs, documents, tests, and reports.
-Supports GitHub repo URL or direct code paste via ANALYSIS_TARGET env var.
+Copied from proven Synapse AI News pattern — urllib + retry rounds + sleep between steps.
 """
 
 import os
 import sys
 import re
-import requests
+import json
+import time
+import urllib.request
+import urllib.error
+import urllib.parse
 from datetime import datetime
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -15,93 +19,73 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
 ANALYSIS_TARGET    = os.environ.get("ANALYSIS_TARGET", "")
 
-# openrouter/free auto-selects from all available free models — no stale IDs
-# Specific models are fallbacks in case the router itself is rate-limited
-MODELS = [
-    "openrouter/free",                              # auto-router, always up to date
+FREE_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
     "google/gemma-3-27b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
     "google/gemma-3-12b-it:free",
-    "google/gemma-3-4b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
 ]
 
 
-def get_headers():
-    """Build headers fresh (so API key is read after env is loaded)."""
-    return {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com",
-        "X-Title": "DevWorkflowAgent"
-    }
+# ── LLM Call — exact Synapse pattern ──────────────────────────────────────────
+def call_ai(prompt, max_tokens=2000):
+    """Try each free model in order. On 429, wait and retry all models up to 3 rounds."""
+    RETRY_ROUNDS = 3
+    RETRY_WAIT   = 60
 
-
-# ── LLM Call with fallback + retry on 429 ────────────────────────────────────
-def call_llm(system: str, user: str) -> str:
-    import time
-    last_error = None
-    for model in MODELS:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user}
-            ],
-            "max_tokens": 1500,
-            "temperature": 0.2
-        }
-        # Retry up to 3 times on 429 before moving to next model
-        for attempt in range(3):
+    for round_num in range(1, RETRY_ROUNDS + 1):
+        for model in FREE_MODELS:
             try:
-                resp = requests.post(
+                payload = json.dumps({
+                    "model": model,
+                    "temperature": 0.4,
+                    "max_tokens": max_tokens,
+                    "messages": [{"role": "user", "content": prompt}]
+                }).encode("utf-8")
+
+                req = urllib.request.Request(
                     "https://openrouter.ai/api/v1/chat/completions",
-                    headers=get_headers(),
-                    json=payload,
-                    timeout=90
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "HTTP-Referer": "https://github.com",
+                        "X-Title": "DevWorkflowAgent"
+                    }
                 )
-                if resp.status_code == 429:
-                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s
-                    print(f"  Model {model} rate limited (429), waiting {wait}s...")
-                    time.sleep(wait)
-                    continue
-                if resp.status_code in (404, 503):
-                    print(f"  Model {model} failed ({resp.status_code}), trying next...")
-                    last_error = resp.text
-                    break  # skip to next model
-                if not resp.ok:
-                    print(f"  LLM error {resp.status_code}: {resp.text[:200]}")
-                    resp.raise_for_status()
-                data = resp.json()
-                content = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content")
-                )
-                if not content:
-                    print(f"  Model {model} returned empty content, trying next...")
-                    last_error = "empty response"
-                    break
-                print(f"  ✓ Model used: {model}")
-                return content.strip()
-            except requests.exceptions.Timeout:
-                print(f"  Model {model} timed out (attempt {attempt+1}), retrying...")
-                last_error = "timeout"
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+
+                content = result["choices"][0]["message"]["content"]
+                print(f"  ✅ Model used: {model}")
+                return content
+
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    print(f"  ⏳ {model} rate-limited (429), trying next...")
+                else:
+                    print(f"  ⚠️  {model} failed: HTTP {e.code}, trying next...")
+                time.sleep(5)
                 continue
             except Exception as e:
-                print(f"  Model {model} error: {e}")
-                last_error = str(e)
-                break
-        else:
-            print(f"  Model {model} exhausted retries, trying next...")
+                print(f"  ⚠️  {model} failed: {e}, trying next...")
+                time.sleep(5)
+                continue
 
-    raise RuntimeError(f"All models failed. Last error: {last_error}")
+        if round_num < RETRY_ROUNDS:
+            print(f"  🔄 All models rate-limited (round {round_num}/{RETRY_ROUNDS}). Waiting {RETRY_WAIT}s...")
+            time.sleep(RETRY_WAIT)
+
+    raise ValueError("All models failed after 3 retry rounds — try again later")
 
 
 # ── GitHub Fetcher ─────────────────────────────────────────────────────────────
 def fetch_github_repo(repo_url: str) -> dict:
     if not repo_url.startswith("http"):
         repo_url = "https://github.com/" + repo_url
+
     match = re.search(r"github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", repo_url)
     if not match:
         raise ValueError(f"Invalid GitHub URL: {repo_url}")
@@ -113,24 +97,18 @@ def fetch_github_repo(repo_url: str) -> dict:
     if GITHUB_TOKEN:
         gh_headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
-    # Get repo info
-    r = requests.get(f"https://api.github.com/repos/{owner}/{repo}", headers=gh_headers, timeout=30)
-    print(f"  Repo API status: {r.status_code}")
-    if r.status_code != 200:
-        print(f"  Error: {r.json().get('message', 'unknown')}")
-        return {}
+    def gh_get(url):
+        req = urllib.request.Request(url, headers=gh_headers)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8"))
 
-    branch = r.json().get("default_branch", "main")
-    print(f"  Default branch: {branch}")
+    info = gh_get(f"https://api.github.com/repos/{owner}/{repo}")
+    branch = info.get("default_branch", "main")
+    print(f"  Branch: {branch}")
 
-    # Get file tree
-    t = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1",
-        headers=gh_headers, timeout=30
-    )
-    print(f"  Tree API status: {t.status_code}")
-    tree = t.json().get("tree", [])
-    print(f"  Total items in tree: {len(tree)}")
+    tree_data = gh_get(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
+    tree = tree_data.get("tree", [])
+    print(f"  Total items: {len(tree)}")
 
     files = {}
     for item in tree:
@@ -144,12 +122,13 @@ def fetch_github_repo(repo_url: str) -> dict:
         if len(files) >= 10:
             break
         raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
-        rc = requests.get(raw_url, headers=gh_headers, timeout=20)
-        if rc.status_code == 200:
-            files[path] = rc.text[:3000]
+        try:
+            req = urllib.request.Request(raw_url, headers=gh_headers)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                files[path] = r.read().decode("utf-8")[:3000]
             print(f"  ✓ {path}")
-        else:
-            print(f"  ✗ {path} ({rc.status_code})")
+        except Exception as e:
+            print(f"  ✗ {path}: {e}")
 
     print(f"  Files fetched: {len(files)}")
     return files
@@ -175,63 +154,51 @@ def prepare_code_context(target: str):
 # ── Agent Steps ────────────────────────────────────────────────────────────────
 def step_understand(source, code):
     print("\n[STEP 1/4] Understanding codebase...")
-    return call_llm(
-        "You are a senior software engineer. Analyze code and give a clear, structured summary.",
-        f"""Analyze this code from '{source}' and provide:
-1. **Purpose** – What does this code/project do?
-2. **Structure** – Key files, classes, functions
-3. **Tech Stack** – Languages, libraries, frameworks used
-4. **Entry Points** – Where does execution start?
+    return call_ai(f"""You are a senior software engineer. Analyze this code from '{source}' and provide:
+1. **Purpose** - What does this project do?
+2. **Structure** - Key files, classes, functions
+3. **Tech Stack** - Languages, libraries, frameworks
+4. **Entry Points** - Where does execution start?
 
 CODE:
-{code[:4000]}"""
-    )
+{code[:4000]}""")
 
 
 def step_debug(source, code):
-    print("[STEP 2/4] Debugging and reviewing...")
-    return call_llm(
-        "You are a code reviewer specializing in finding bugs, security issues, and code smells.",
-        f"""Review this code from '{source}' and identify:
-1. **Bugs** – Logic errors, edge cases, crashes
-2. **Security Issues** – Hardcoded secrets, injection risks, unsafe calls
-3. **Code Quality** – Bad practices, missing error handling, dead code
-4. **Performance** – Inefficiencies, memory leaks
+    print("\n[STEP 2/4] Debugging and reviewing...")
+    return call_ai(f"""You are a code reviewer. Review this code from '{source}' and identify:
+1. **Bugs** - Logic errors, edge cases, crashes
+2. **Security Issues** - Hardcoded secrets, injection risks
+3. **Code Quality** - Bad practices, missing error handling
+4. **Performance** - Inefficiencies, memory leaks
 
-For each issue: file/line if visible, describe the problem, suggest the fix.
+For each issue: describe the problem and suggest the fix.
 
 CODE:
-{code[:4000]}"""
-    )
+{code[:4000]}""")
 
 
 def step_document(source, code):
-    print("[STEP 3/4] Generating documentation...")
-    return call_llm(
-        "You are a technical writer. Generate clear, professional documentation.",
-        f"""Generate documentation for the code from '{source}':
-1. **README Overview** – Project description, setup steps, usage
-2. **Function/Class Docstrings** – For the 3 most important functions, write proper docstrings
-3. **API Reference** – List public functions with parameters and return values
+    print("\n[STEP 3/4] Generating documentation...")
+    return call_ai(f"""You are a technical writer. Generate documentation for '{source}':
+1. **README Overview** - Project description, setup, usage
+2. **Docstrings** - For the 3 most important functions
+3. **API Reference** - Public functions with parameters and return values
 
 CODE:
-{code[:4000]}"""
-    )
+{code[:4000]}""")
 
 
 def step_test(source, code):
-    print("[STEP 4/4] Writing unit tests...")
-    return call_llm(
-        "You are a QA engineer. Write thorough, runnable unit tests.",
-        f"""Write unit tests for the code from '{source}':
+    print("\n[STEP 4/4] Writing unit tests...")
+    return call_ai(f"""You are a QA engineer. Write unit tests for '{source}':
 1. Identify the 3-5 most important functions to test
-2. Write pytest-compatible unit tests for each
-3. Include: happy path, edge cases, and error cases
-4. Use mocking where external calls are needed
+2. Write pytest-compatible tests for each
+3. Include happy path, edge cases, and error cases
+4. Use mocking for external calls (requests, DB, etc.)
 
 CODE:
-{code[:4000]}"""
-    )
+{code[:4000]}""")
 
 
 # ── Report ─────────────────────────────────────────────────────────────────────
@@ -240,7 +207,6 @@ def build_report(source, understanding, debug, docs, tests):
     return f"""# 🤖 Dev Workflow Agent Report
 **Source:** {source}
 **Generated:** {now}
-**Model:** {MODEL}
 
 ---
 
@@ -285,15 +251,21 @@ def run_agent(target: str):
         print("ERROR: ANALYSIS_TARGET not set.")
         sys.exit(1)
 
-    print(f"\n  API Key present: {'yes' if OPENROUTER_API_KEY else 'NO'}")
+    print(f"\n  API Key present: yes")
     print(f"  Target: {target[:80]}")
 
     source, code = prepare_code_context(target)
 
     understanding = step_understand(source, code)
-    debug         = step_debug(source, code)
-    docs          = step_document(source, code)
-    tests         = step_test(source, code)
+    time.sleep(8)
+
+    debug = step_debug(source, code)
+    time.sleep(8)
+
+    docs = step_document(source, code)
+    time.sleep(8)
+
+    tests = step_test(source, code)
 
     report = build_report(source, understanding, debug, docs, tests)
 
