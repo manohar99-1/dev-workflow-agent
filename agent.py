@@ -61,7 +61,7 @@ def call_llm(system: str, user: str) -> str:
                     timeout=90
                 )
                 if resp.status_code == 429:
-                    wait = 10 * (attempt + 1)  # 10s, 20s, 30s
+                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s
                     print(f"  Model {model} rate limited (429), waiting {wait}s...")
                     time.sleep(wait)
                     continue
@@ -72,8 +72,18 @@ def call_llm(system: str, user: str) -> str:
                 if not resp.ok:
                     print(f"  LLM error {resp.status_code}: {resp.text[:200]}")
                     resp.raise_for_status()
+                data = resp.json()
+                content = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content")
+                )
+                if not content:
+                    print(f"  Model {model} returned empty content, trying next...")
+                    last_error = "empty response"
+                    break
                 print(f"  ✓ Model used: {model}")
-                return resp.json()["choices"][0]["message"]["content"].strip()
+                return content.strip()
             except requests.exceptions.Timeout:
                 print(f"  Model {model} timed out (attempt {attempt+1}), retrying...")
                 last_error = "timeout"
