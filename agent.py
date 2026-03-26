@@ -15,17 +15,15 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
 ANALYSIS_TARGET    = os.environ.get("ANALYSIS_TARGET", "")
 
-# Fallback model list — tries each in order if previous fails (404/429/503)
+# openrouter/free auto-selects from all available free models — no stale IDs
+# Specific models are fallbacks in case the router itself is rate-limited
 MODELS = [
+    "openrouter/free",                              # auto-router, always up to date
     "meta-llama/llama-3.3-70b-instruct:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
     "google/gemma-3-27b-it:free",
-    "google/gemini-2.0-flash-exp:free",
-    "microsoft/phi-4-reasoning-plus:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "tngtech/deepseek-r1t-chimera:free",
-    "moonshotai/kimi-vl-a3b-thinking:free",
-    "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
+    "google/gemma-3-12b-it:free",
+    "google/gemma-3-4b-it:free",
 ]
 
 
