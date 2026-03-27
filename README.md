@@ -21,10 +21,18 @@ Output is printed to terminal **and** saved as a Markdown report in `/reports/`.
 
 ### 1. Fork or create this repo on GitHub
 
-### 2. Add your secret
+### 2. Add your API key secrets
 Go to: `Settings → Secrets → Actions → New repository secret`
+
+**Option A: OpenRouter (recommended)**
 - Name: `OPENROUTER_API_KEY`
-- Value: your OpenRouter API key
+- Value: your OpenRouter API key from https://openrouter.ai
+
+**Option B: HuggingFace (free alternative)**
+- Name: `HF_TOKEN`
+- Value: your HuggingFace token from https://huggingface.co/settings/tokens
+
+**No API key?** The agent will run in demo mode with rule-based analysis templates.
 
 ### 3. Run the agent
 Go to: `Actions → Dev Workflow Agent → Run workflow`
@@ -43,9 +51,10 @@ Enter either:
 ## Tech Stack
 
 - **Python 3.11**
-- **OpenRouter** (free `mistral-7b-instruct` model)
+- **OpenRouter** (free LLaMA/Gemma models) OR **HuggingFace Inference API**
 - **GitHub Actions** (runs on every trigger, no server needed)
 - **GitHub API** (fetches repo files automatically)
+- **Demo fallback** (works even without API keys)
 
 ---
 
