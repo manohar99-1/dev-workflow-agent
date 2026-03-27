@@ -32,8 +32,8 @@ FREE_MODELS = [
 # ── LLM Call — exact Synapse pattern ──────────────────────────────────────────
 def call_ai(prompt, max_tokens=2000):
     """Try each free model in order. On 429, wait and retry all models up to 3 rounds."""
-    RETRY_ROUNDS = 3
-    RETRY_WAIT   = 60
+    RETRY_ROUNDS = 1
+    RETRY_WAIT   = 30
 
     for round_num in range(1, RETRY_ROUNDS + 1):
         for model in FREE_MODELS:
@@ -257,13 +257,13 @@ def run_agent(target: str):
     source, code = prepare_code_context(target)
 
     understanding = step_understand(source, code)
-    time.sleep(8)
+    time.sleep(30)
 
     debug = step_debug(source, code)
-    time.sleep(8)
+    time.sleep(30)
 
     docs = step_document(source, code)
-    time.sleep(8)
+    time.sleep(30)
 
     tests = step_test(source, code)
 
