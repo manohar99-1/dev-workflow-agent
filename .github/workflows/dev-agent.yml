@@ -30,7 +30,7 @@ jobs:
       - name: Run Dev Workflow Agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANALYSIS_TARGET: ${{ github.event.inputs.analysis_target }}
         run: python agent.py
