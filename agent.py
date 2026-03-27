@@ -15,200 +15,13 @@ import urllib.parse
 from datetime import datetime
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
 ANALYSIS_TARGET    = os.environ.get("ANALYSIS_TARGET", "")
 
-# OpenRouter free models (Groq blocked by Cloudflare on GitHub Actions)
-OPENROUTER_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-27b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "google/gemma-3-12b-it:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-]
-
 
 def _call(url, headers, model, prompt, max_tokens):
-    """Single API call, returns content string or raises."""
-    payload = json.dumps({
-        "model": model,
-        "temperature": 0.4,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}]
-    }).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers=headers)
-    with urllib.request.urlopen(req, timeout=90) as r:
-        result = json.loads(r.read().decode("utf-8"))
-    return result["choices"][0]["message"]["content"]
-
-
-# ── LLM Call — Multiple free APIs with intelligent fallback ──────────────────
-def call_ai(prompt, max_tokens=2000):
-    """Try multiple free API providers in order, with demo fallback if all fail."""
-    
-    # 1. Try OpenRouter free models
-    if OPENROUTER_API_KEY:
-        or_headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "HTTP-Referer": "https://github.com",
-            "X-Title": "DevWorkflowAgent"
-        }
-        for model in OPENROUTER_MODELS:
-            try:
-                content = _call(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    or_headers, model, prompt, max_tokens
-                )
-                print(f"  ✅ OpenRouter model: {model}")
-                return content
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    print(f"  ⏳ OpenRouter {model} rate-limited, trying next...")
-                else:
-                    print(f"  ⚠️  OpenRouter {model} failed: HTTP {e.code}, trying next...")
-                time.sleep(2)
-            except Exception as e:
-                print(f"  ⚠️  OpenRouter {model} error: {e}, trying next...")
-                time.sleep(2)
-    
-    # 2. Try Hugging Face Inference API (free, no rate limits for small models)
-    hf_token = os.environ.get("HF_TOKEN", "")
-    if hf_token:
-        print("  🔄 Trying Hugging Face API...")
-        hf_models = [
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "google/flan-t5-large",
-        ]
-        for model in hf_models:
-            try:
-                hf_headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {hf_token}",
-                }
-                hf_payload = json.dumps({
-                    "inputs": prompt[:2000],
-                    "parameters": {"max_new_tokens": max_tokens, "temperature": 0.4}
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"https://api-inference.huggingface.co/models/{model}",
-                    data=hf_payload,
-                    headers=hf_headers
-                )
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    result = json.loads(r.read().decode("utf-8"))
-                content = result[0].get("generated_text", "").strip()
-                if content:
-                    print(f"  ✅ HuggingFace model: {model}")
-                    return content
-            except Exception as e:
-                print(f"  ⚠️  HuggingFace {model} error: {e}")
-                time.sleep(2)
-    
-    # 3. Final fallback: Generate demo analysis (shows agent structure works)
-    print("  ⚠️  All API providers exhausted or quota limited.")
-    print("  📝 Generating demonstration analysis using rule-based templates...")
-    
-    # Extract step type from prompt to return appropriate demo content
-    if "senior software engineer" in prompt.lower() and "analyze this code" in prompt.lower():
-        return """**Purpose**: This is a web application project combining frontend and backend components.
-
-**Structure**: 
-- Frontend: React/Vite-based UI components
-- Backend: Python agent system with modular architecture
-- Configuration: Settings and topic management
-
-**Tech Stack**:
-- Languages: Python, JavaScript/JSX
-- Frontend: React, Vite
-- Backend: Python with custom agent modules
-
-**Entry Points**:
-- Frontend: `src/App.jsx` - Main React component
-- Backend: `agent-src/agent/run.py` - Agent execution entry point"""
-    
-    elif "code reviewer" in prompt.lower():
-        return """**Bugs**:
-- Missing error handling in API calls
-- No validation for user inputs
-- Potential race conditions in async operations
-
-**Security Issues**:
-- API keys should be environment variables (check if hardcoded)
-- Input sanitization needed for user-provided data
-- CORS configuration should be reviewed
-
-**Code Quality**:
-- Add comprehensive error handling and logging
-- Implement input validation
-- Add TypeScript for better type safety
-
-**Performance**:
-- Consider implementing caching for repeated API calls
-- Optimize bundle size for frontend assets
-- Add lazy loading for components"""
-    
-    elif "technical writer" in prompt.lower():
-        return """**README Overview**:
-# Project Name
-A full-stack application with React frontend and Python backend agent system.
-
-## Setup
-```bash
-# Install dependencies
-npm install
-pip install -r requirements.txt
-
-# Run the application
-npm run dev
-python agent-src/agent/run.py
-```
-
-**Docstrings**: Add docstrings to key functions following this format:
-```python
-def function_name(param1, param2):
-    \"\"\"
-    Brief description of function purpose.
-    
-    Args:
-        param1: Description of first parameter
-        param2: Description of second parameter
-    
-    Returns:
-        Description of return value
-    \"\"\"
-```
-
-**API Reference**: Document all public functions with their parameters, return types, and usage examples."""
-    
-    else:  # Test generation
-        return """**Test Suite**:
-
-```python
-import pytest
-from unittest.mock import Mock, patch
-
-def test_main_function_happy_path():
-    \"\"\"Test successful execution with valid inputs\"\"\"
-    result = main_function("valid_input")
-    assert result is not None
-    assert result.status == "success"
-
-def test_main_function_edge_cases():
-    \"\"\"Test edge cases like empty strings, None values\"\"\"
-    assert main_function("") == expected_empty_result
-    assert main_function(None) == expected_none_result
-
-@patch('module.external_api_call')
-def test_with_mocked_api(mock_api):
-    \"\"\"Test with mocked external dependencies\"\"\"
-    mock_api.return_value = {"data": "test"}
-    result = function_using_api()
-    mock_api.assert_called_once()
-    assert result["data"] == "test"
-```"""
+    """Removed - using rule-based analysis instead."""
+    pass
 
 
 # ── GitHub Fetcher ─────────────────────────────────────────────────────────────
@@ -264,152 +77,354 @@ def fetch_github_repo(repo_url: str) -> dict:
     return files
 
 
-# ── Input Preparation ──────────────────────────────────────────────────────────
-def prepare_code_context(target: str):
-    target = target.strip()
-    if "github.com" in target or re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", target):
-        print(f"\n[INPUT] GitHub repo detected: {target}")
-        files = fetch_github_repo(target)
-        if not files:
-            raise ValueError("No files fetched. Repo may be private or empty.")
-        combined = ""
-        for fname, content in files.items():
-            combined += f"\n\n### FILE: {fname}\n```\n{content}\n```"
-        return target, combined
+# ── Rule-Based Code Analysis (No LLM needed) ──────────────────────────────────
+def analyze_code_structure(filename, code):
+    """Analyze code structure using rule-based pattern matching."""
+    lines = code.split('\n')
+    total_lines = len(lines)
+    code_lines = len([l for l in lines if l.strip() and not l.strip().startswith('#') and not l.strip().startswith('//')])
+    comment_lines = len([l for l in lines if l.strip().startswith('#') or l.strip().startswith('//')])
+    
+    # Detect language
+    ext = filename.split('.')[-1] if '.' in filename else ''
+    lang_map = {
+        'py': 'Python', 'js': 'JavaScript', 'jsx': 'React/JSX', 
+        'ts': 'TypeScript', 'tsx': 'React/TypeScript', 'md': 'Markdown'
+    }
+    language = lang_map.get(ext, ext.upper() if ext else 'Unknown')
+    
+    # Extract imports/dependencies
+    imports = []
+    for line in lines[:50]:  # Check first 50 lines
+        if 'import ' in line or 'from ' in line or 'require(' in line:
+            imports.append(line.strip())
+    
+    # Extract functions/classes
+    functions = []
+    classes = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('def ') and '(' in stripped:
+            func_name = stripped.split('def ')[1].split('(')[0]
+            functions.append(f"Line {i+1}: {func_name}()")
+        elif stripped.startswith('function ') or 'const ' in stripped and '=>' in stripped:
+            if 'function ' in stripped:
+                func_name = stripped.split('function ')[1].split('(')[0].strip()
+            else:
+                func_name = stripped.split('const ')[1].split('=')[0].strip()
+            functions.append(f"Line {i+1}: {func_name}()")
+        elif stripped.startswith('class '):
+            class_name = stripped.split('class ')[1].split('(')[0].split(':')[0].split('{')[0].strip()
+            classes.append(f"Line {i+1}: {class_name}")
+    
+    return {
+        'language': language,
+        'total_lines': total_lines,
+        'code_lines': code_lines,
+        'comment_lines': comment_lines,
+        'imports': imports[:10],  # First 10 imports
+        'functions': functions[:15],  # First 15 functions
+        'classes': classes[:10]  # First 10 classes
+    }
+
+
+def detect_issues(filename, code):
+    """Detect common code issues using pattern matching."""
+    issues = {
+        'bugs': [],
+        'security': [],
+        'quality': [],
+        'performance': []
+    }
+    
+    lines = code.split('\n')
+    
+    for i, line in enumerate(lines, 1):
+        lower_line = line.lower()
+        
+        # Bug patterns
+        if 'todo' in lower_line or 'fixme' in lower_line:
+            issues['bugs'].append(f"Line {i}: TODO/FIXME comment found")
+        if 'except:' in line or 'except :' in line:
+            issues['bugs'].append(f"Line {i}: Bare except clause (catches all exceptions)")
+        if '== None' in line or '!= None' in line:
+            issues['bugs'].append(f"Line {i}: Use 'is None' instead of '== None'")
+        
+        # Security patterns
+        if 'api_key' in lower_line or 'password' in lower_line or 'secret' in lower_line:
+            if '=' in line and '"' in line:
+                issues['security'].append(f"Line {i}: Potential hardcoded credential")
+        if 'eval(' in line:
+            issues['security'].append(f"Line {i}: Use of eval() is dangerous")
+        if 'dangerouslySetInnerHTML' in line:
+            issues['security'].append(f"Line {i}: XSS risk with dangerouslySetInnerHTML")
+        
+        # Quality patterns
+        if len(line) > 120:
+            issues['quality'].append(f"Line {i}: Line too long ({len(line)} chars)")
+        if line.count('    ') > 5:  # Deep nesting
+            issues['quality'].append(f"Line {i}: Deep nesting detected (refactor recommended)")
+        
+        # Performance patterns
+        if '.append(' in line and ('for ' in lower_line or 'while ' in lower_line):
+            issues['performance'].append(f"Line {i}: List append in loop (consider list comprehension)")
+        if 'time.sleep(' in line:
+            issues['performance'].append(f"Line {i}: Blocking sleep call")
+    
+    return issues
+
+
+def generate_tests(filename, code):
+    """Generate test cases based on code analysis."""
+    analysis = analyze_code_structure(filename, code)
+    tests = []
+    
+    # Generate tests for each function found
+    for func in analysis['functions'][:5]:  # Top 5 functions
+        func_name = func.split(': ')[1].replace('()', '')
+        tests.append(f"""
+def test_{func_name}_happy_path():
+    \"\"\"Test {func_name} with valid inputs\"\"\"
+    result = {func_name}(valid_test_input)
+    assert result is not None
+    # Add specific assertions based on expected behavior
+
+def test_{func_name}_edge_cases():
+    \"\"\"Test {func_name} with edge cases\"\"\"
+    assert {func_name}(None) handles None appropriately
+    assert {func_name}("") handles empty string
+    assert {func_name}(0) handles zero value
+""")
+    
+    return '\n'.join(tests) if tests else "No testable functions detected in this file."
+
+
+# ── Agent Steps (Rule-Based) ───────────────────────────────────────────────────
+def step_understand(filename, code):
+    """Analyze code structure without LLM."""
+    print(f"\n[ANALYZING] {filename}")
+    analysis = analyze_code_structure(filename, code)
+    
+    report = f"""**Language**: {analysis['language']}
+
+**Metrics**:
+- Total Lines: {analysis['total_lines']}
+- Code Lines: {analysis['code_lines']}
+- Comment Lines: {analysis['comment_lines']}
+- Comment Ratio: {(analysis['comment_lines']/analysis['total_lines']*100):.1f}%
+
+**Dependencies** ({len(analysis['imports'])} found):
+"""
+    for imp in analysis['imports']:
+        report += f"\n- `{imp}`"
+    
+    if not analysis['imports']:
+        report += "\n- No imports detected"
+    
+    report += f"\n\n**Structure**:"
+    
+    if analysis['classes']:
+        report += f"\n\nClasses ({len(analysis['classes'])}):"
+        for cls in analysis['classes']:
+            report += f"\n- {cls}"
+    
+    if analysis['functions']:
+        report += f"\n\nFunctions ({len(analysis['functions'])}):"
+        for func in analysis['functions']:
+            report += f"\n- {func}"
+    
+    if not analysis['classes'] and not analysis['functions']:
+        report += "\n- No classes or functions detected (likely config/data file)"
+    
+    return report
+
+
+def step_debug(filename, code):
+    """Find issues using pattern matching."""
+    print(f"[DEBUGGING] {filename}")
+    issues = detect_issues(filename, code)
+    
+    report = ""
+    
+    if issues['bugs']:
+        report += f"**Potential Bugs** ({len(issues['bugs'])} found):\n"
+        for bug in issues['bugs'][:10]:
+            report += f"- {bug}\n"
     else:
-        print("\n[INPUT] Direct code input detected.")
-        return "Pasted Code", target
+        report += "**Potential Bugs**: None detected ✓\n"
+    
+    if issues['security']:
+        report += f"\n**Security Concerns** ({len(issues['security'])} found):\n"
+        for sec in issues['security'][:10]:
+            report += f"- {sec}\n"
+    else:
+        report += "\n**Security Concerns**: None detected ✓\n"
+    
+    if issues['quality']:
+        report += f"\n**Code Quality** ({len(issues['quality'])} found):\n"
+        for qual in issues['quality'][:10]:
+            report += f"- {qual}\n"
+    else:
+        report += "\n**Code Quality**: No issues detected ✓\n"
+    
+    if issues['performance']:
+        report += f"\n**Performance** ({len(issues['performance'])} found):\n"
+        for perf in issues['performance'][:10]:
+            report += f"- {perf}\n"
+    else:
+        report += "\n**Performance**: No issues detected ✓\n"
+    
+    return report
 
 
-# ── Agent Steps ────────────────────────────────────────────────────────────────
-def step_understand(source, code):
-    print("\n[STEP 1/4] Understanding codebase...")
-    return call_ai(f"""You are a senior software engineer. Analyze this code from '{source}' and provide:
-1. **Purpose** - What does this project do?
-2. **Structure** - Key files, classes, functions
-3. **Tech Stack** - Languages, libraries, frameworks
-4. **Entry Points** - Where does execution start?
-
-CODE:
-{code[:4000]}""")
-
-
-def step_debug(source, code):
-    print("\n[STEP 2/4] Debugging and reviewing...")
-    return call_ai(f"""You are a code reviewer. Review this code from '{source}' and identify:
-1. **Bugs** - Logic errors, edge cases, crashes
-2. **Security Issues** - Hardcoded secrets, injection risks
-3. **Code Quality** - Bad practices, missing error handling
-4. **Performance** - Inefficiencies, memory leaks
-
-For each issue: describe the problem and suggest the fix.
-
-CODE:
-{code[:4000]}""")
+def step_document(filename, code):
+    """Generate documentation template."""
+    print(f"[DOCUMENTING] {filename}")
+    analysis = analyze_code_structure(filename, code)
+    
+    report = f"**File**: `{filename}`\n\n"
+    report += f"**Purpose**: {analysis['language']} file with {len(analysis['functions'])} functions and {len(analysis['classes'])} classes.\n\n"
+    
+    if analysis['functions']:
+        report += "**Key Functions**:\n"
+        for func in analysis['functions'][:5]:
+            func_name = func.split(': ')[1]
+            report += f"\n- `{func_name}`: [Add description]\n"
+            report += f"  - Parameters: [Document parameters]\n"
+            report += f"  - Returns: [Document return value]\n"
+    
+    if analysis['classes']:
+        report += "\n**Classes**:\n"
+        for cls in analysis['classes'][:5]:
+            cls_name = cls.split(': ')[1]
+            report += f"\n- `{cls_name}`: [Add description]\n"
+    
+    return report
 
 
-def step_document(source, code):
-    print("\n[STEP 3/4] Generating documentation...")
-    return call_ai(f"""You are a technical writer. Generate documentation for '{source}':
-1. **README Overview** - Project description, setup, usage
-2. **Docstrings** - For the 3 most important functions
-3. **API Reference** - Public functions with parameters and return values
-
-CODE:
-{code[:4000]}""")
-
-
-def step_test(source, code):
-    print("\n[STEP 4/4] Writing unit tests...")
-    return call_ai(f"""You are a QA engineer. Write unit tests for '{source}':
-1. Identify the 3-5 most important functions to test
-2. Write pytest-compatible tests for each
-3. Include happy path, edge cases, and error cases
-4. Use mocking for external calls (requests, DB, etc.)
-
-CODE:
-{code[:4000]}""")
+def step_test(filename, code):
+    """Generate test templates."""
+    print(f"[TESTING] {filename}")
+    return generate_tests(filename, code)
 
 
 # ── Report ─────────────────────────────────────────────────────────────────────
-def build_report(source, understanding, debug, docs, tests):
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    return f"""# 🤖 Dev Workflow Agent Report
-**Source:** {source}
-**Generated:** {now}
+def build_file_report(filename, understanding, debug, docs, tests):
+    """Build report for a single file."""
+    return f"""
+## 📄 File: `{filename}`
 
----
-
-## 📋 Step 1: Code Understanding
-
+### 📋 Code Analysis
 {understanding}
 
----
-
-## 🐛 Step 2: Debug & Code Review
-
+### 🐛 Issues & Quality Check
 {debug}
 
----
-
-## 📝 Step 3: Documentation
-
+### 📝 Documentation Template
 {docs}
 
----
-
-## 🧪 Step 4: Unit Tests
-
+### 🧪 Test Cases
 {tests}
 
 ---
-*Generated by Dev Workflow Agent — LegalSeva Assignment 2*
 """
+
+
+def build_final_report(source, file_reports, file_count):
+    """Build the complete multi-file report."""
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    
+    summary = f"""# 🤖 Dev Workflow Agent Report
+**Source**: {source}
+**Generated**: {now}
+**Files Analyzed**: {file_count}
+
+---
+
+## 📊 Repository Summary
+
+This repository contains **{file_count} analyzable files** across the following structure:
+"""
+    
+    return summary + "\n" + file_reports + "\n" + "*Generated by Dev Workflow Agent — LegalSeva Assignment 2*"
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def run_agent(target: str):
     print("=" * 60)
     print("  DEV WORKFLOW AGENT — LegalSeva Assignment 2")
+    print("  RULE-BASED CODE ANALYSIS (NO LLM REQUIRED)")
     print("=" * 60)
-
-    if not OPENROUTER_API_KEY:
-        print("⚠️  WARNING: OPENROUTER_API_KEY not set. Will use demo mode if needed.")
 
     if not target:
         print("ERROR: ANALYSIS_TARGET not set.")
         sys.exit(1)
 
-    print(f"  OpenRouter key: {'yes' if OPENROUTER_API_KEY else 'demo mode'}")
-    print(f"  HuggingFace key: {'yes' if os.environ.get('HF_TOKEN') else 'not set'}")
-    print(f"  Target: {target[:80]}")
+    print(f"  Target: {target[:80]}\n")
 
-    source, code = prepare_code_context(target)
-
-    understanding = step_understand(source, code)
-    time.sleep(30)
-
-    debug = step_debug(source, code)
-    time.sleep(30)
-
-    docs = step_document(source, code)
-    time.sleep(30)
-
-    tests = step_test(source, code)
-
-    report = build_report(source, understanding, debug, docs, tests)
-
+    # Get all files
+    if "github.com" in target or re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", target):
+        print(f"[INPUT] GitHub repo detected: {target}")
+        files = fetch_github_repo(target)
+        source = target
+    else:
+        print("[INPUT] Direct code input detected.")
+        files = {"pasted_code": target}
+        source = "Pasted Code"
+    
+    if not files:
+        print("ERROR: No files to analyze.")
+        sys.exit(1)
+    
+    file_count = len(files)
+    print(f"\n{'='*60}")
+    print(f"  FOUND {file_count} FILES TO ANALYZE")
+    print(f"{'='*60}\n")
+    
+    # Analyze each file independently
+    all_file_reports = ""
+    
+    for idx, (filename, code) in enumerate(files.items(), 1):
+        print(f"\n{'─'*60}")
+        print(f"  FILE {idx}/{file_count}: {filename}")
+        print(f"{'─'*60}")
+        
+        # Run 4 steps for this file
+        understanding = step_understand(filename, code)
+        debug = step_debug(filename, code)
+        docs = step_document(filename, code)
+        tests = step_test(filename, code)
+        
+        # Build report for this file
+        file_report = build_file_report(filename, understanding, debug, docs, tests)
+        all_file_reports += file_report
+        
+        print(f"  ✅ Analysis complete for {filename}")
+    
+    # Build final combined report
+    final_report = build_final_report(source, all_file_reports, file_count)
+    
     print("\n" + "=" * 60)
-    print(report)
+    print("  REPORT GENERATION COMPLETE")
     print("=" * 60)
-
+    
+    # Save report
     os.makedirs("reports", exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"reports/report_{timestamp}.md"
     with open(filename, "w", encoding="utf-8") as f:
-        f.write(report)
-
-    print(f"\n✅ Report saved to: {filename}")
+        f.write(final_report)
+    
+    print(f"\n✅ Full report saved to: {filename}")
+    print(f"📊 Total files analyzed: {file_count}")
+    print(f"📄 Report size: {len(final_report)} characters")
+    
+    # Print summary to terminal
+    print("\n" + "=" * 60)
+    print("REPORT PREVIEW")
+    print("=" * 60)
+    print(final_report[:2000])
+    print("\n... (see full report in file) ...")
 
 
 if __name__ == "__main__":
