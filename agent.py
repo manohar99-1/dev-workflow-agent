@@ -79,8 +79,8 @@ def call_ai(prompt, max_tokens=2000):
     if hf_token:
         print("  🔄 Trying Hugging Face API...")
         hf_models = [
-            "meta-llama/Llama-3.2-3B-Instruct",
-            "microsoft/Phi-3-mini-4k-instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "google/flan-t5-large",
         ]
         for model in hf_models:
             try:
