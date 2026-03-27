@@ -76,7 +76,7 @@ def call_ai(prompt, max_tokens=2000):
                 else:
                     print(f"  ⚠️  Groq {model} failed: HTTP {e.code}, trying next...")
             except Exception as e:
-                print(f"  ⚠️  Groq {model} error: {e}, trying next...")
+                print(f"  ⚠️  Groq {model} error: {type(e).__name__}: {e}")
 
     # 2. Fallback to OpenRouter
     if OPENROUTER_API_KEY:
@@ -270,15 +270,16 @@ def run_agent(target: str):
     print("  DEV WORKFLOW AGENT — LegalSeva Assignment 2")
     print("=" * 60)
 
-    if not OPENROUTER_API_KEY:
-        print("ERROR: OPENROUTER_API_KEY not set.")
+    if not GROQ_API_KEY and not OPENROUTER_API_KEY:
+        print("ERROR: No API keys set. Add GROQ_API_KEY or OPENROUTER_API_KEY secret.")
         sys.exit(1)
 
     if not target:
         print("ERROR: ANALYSIS_TARGET not set.")
         sys.exit(1)
 
-    print(f"\n  API Key present: yes")
+    print(f"\n  GROQ key: {'yes' if GROQ_API_KEY else 'MISSING'}")
+    print(f"  OpenRouter key: {'yes' if OPENROUTER_API_KEY else 'MISSING'}")
     print(f"  Target: {target[:80]}")
 
     source, code = prepare_code_context(target)
