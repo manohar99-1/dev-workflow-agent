@@ -70,11 +70,12 @@ def call_ai(prompt, max_tokens=2000):
                 print(f"  ✅ Groq model: {model}")
                 return content
             except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8")[:200]
                 if e.code == 429:
                     print(f"  ⏳ Groq {model} rate-limited, waiting 60s...")
                     time.sleep(60)
                 else:
-                    print(f"  ⚠️  Groq {model} failed: HTTP {e.code}, trying next...")
+                    print(f"  ⚠️  Groq {model} HTTP {e.code}: {body}")
             except Exception as e:
                 print(f"  ⚠️  Groq {model} error: {type(e).__name__}: {e}")
 
@@ -278,7 +279,7 @@ def run_agent(target: str):
         print("ERROR: ANALYSIS_TARGET not set.")
         sys.exit(1)
 
-    print(f"\n  GROQ key: {'yes' if GROQ_API_KEY else 'MISSING'}")
+    print(f"\n  GROQ key: {GROQ_API_KEY[:12]}... (len={len(GROQ_API_KEY)})" if GROQ_API_KEY else "  GROQ key: MISSING")
     print(f"  OpenRouter key: {'yes' if OPENROUTER_API_KEY else 'MISSING'}")
     print(f"  Target: {target[:80]}")
 
