@@ -19,66 +19,93 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
 ANALYSIS_TARGET    = os.environ.get("ANALYSIS_TARGET", "")
 
-FREE_MODELS = [
+# Groq models — fast, free, resets per minute not per day
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768",
+]
+
+# OpenRouter as fallback
+OPENROUTER_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemma-3-27b-it:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "google/gemma-3-12b-it:free",
     "meta-llama/llama-3.2-3b-instruct:free",
 ]
 
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
-# ── LLM Call — exact Synapse pattern ──────────────────────────────────────────
+
+def _call(url, headers, model, prompt, max_tokens):
+    """Single API call, returns content string or raises."""
+    payload = json.dumps({
+        "model": model,
+        "temperature": 0.4,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}]
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers=headers)
+    with urllib.request.urlopen(req, timeout=90) as r:
+        result = json.loads(r.read().decode("utf-8"))
+    return result["choices"][0]["message"]["content"]
+
+
+# ── LLM Call — Groq first, OpenRouter fallback ────────────────────────────────
 def call_ai(prompt, max_tokens=2000):
-    """Try each free model in order. On 429, wait and retry all models up to 3 rounds."""
-    RETRY_ROUNDS = 1
-    RETRY_WAIT   = 30
-
-    for round_num in range(1, RETRY_ROUNDS + 1):
-        for model in FREE_MODELS:
+    # 1. Try Groq first (fast, per-minute limit, recovers quickly)
+    if GROQ_API_KEY:
+        groq_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+        }
+        for model in GROQ_MODELS:
             try:
-                payload = json.dumps({
-                    "model": model,
-                    "temperature": 0.4,
-                    "max_tokens": max_tokens,
-                    "messages": [{"role": "user", "content": prompt}]
-                }).encode("utf-8")
-
-                req = urllib.request.Request(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "HTTP-Referer": "https://github.com",
-                        "X-Title": "DevWorkflowAgent"
-                    }
+                content = _call(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    groq_headers, model, prompt, max_tokens
                 )
-                with urllib.request.urlopen(req, timeout=90) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-
-                content = result["choices"][0]["message"]["content"]
-                print(f"  ✅ Model used: {model}")
+                print(f"  ✅ Groq model: {model}")
                 return content
-
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    print(f"  ⏳ {model} rate-limited (429), trying next...")
+                    print(f"  ⏳ Groq {model} rate-limited, waiting 60s...")
+                    time.sleep(60)
                 else:
-                    print(f"  ⚠️  {model} failed: HTTP {e.code}, trying next...")
-                time.sleep(5)
-                continue
+                    print(f"  ⚠️  Groq {model} failed: HTTP {e.code}, trying next...")
             except Exception as e:
-                print(f"  ⚠️  {model} failed: {e}, trying next...")
-                time.sleep(5)
-                continue
+                print(f"  ⚠️  Groq {model} error: {e}, trying next...")
 
-        if round_num < RETRY_ROUNDS:
-            print(f"  🔄 All models rate-limited (round {round_num}/{RETRY_ROUNDS}). Waiting {RETRY_WAIT}s...")
-            time.sleep(RETRY_WAIT)
+    # 2. Fallback to OpenRouter
+    if OPENROUTER_API_KEY:
+        print("  🔄 Falling back to OpenRouter...")
+        or_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer": "https://github.com",
+            "X-Title": "DevWorkflowAgent"
+        }
+        for model in OPENROUTER_MODELS:
+            try:
+                content = _call(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    or_headers, model, prompt, max_tokens
+                )
+                print(f"  ✅ OpenRouter model: {model}")
+                return content
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    print(f"  ⏳ OpenRouter {model} rate-limited, trying next...")
+                else:
+                    print(f"  ⚠️  OpenRouter {model} failed: HTTP {e.code}, trying next...")
+                time.sleep(2)
+            except Exception as e:
+                print(f"  ⚠️  OpenRouter {model} error: {e}, trying next...")
+                time.sleep(2)
 
-    raise ValueError("All models failed after 3 retry rounds — try again later")
+    raise ValueError("All models and providers exhausted.")
 
 
 # ── GitHub Fetcher ─────────────────────────────────────────────────────────────
